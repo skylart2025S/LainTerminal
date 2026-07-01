@@ -4,20 +4,20 @@ A small GUI terminal emulator in Rust, themed after *Serial Experiments Lain*.
 It runs a real shell and shows a "Lain" avatar in a side panel whose expression
 reacts to what your commands do.
 
+Click the picture to view it !!!
+[![Watch the demo](https://img.youtube.com/vi/POFEEpMix2g/hqdefault.jpg)](https://www.youtube.com/watch?v=POFEEpMix2g)
 ## Features
 
 - Full terminal emulation (works with `vim`, `nano`, and other TUIs)
-- **Lain reacts to your commands** — happy on success, sad/upset on failure,
-  "watching" while you type, via OSC 133 shell integration
-- Animated sprites (GIFs) per mood, with an optional MP4/GIF boot splash
+- **Lain reacts to your commands** happy, sad/upset,
+  "watching" while you type
+- Animated sprites (GIFs) per mood
 - Live system stats (CPU, memory, network, load) from `/proc`
-- Custom "Navi"-style window frame with CRT scanlines
 
 ## Requirements
 
 - Rust (edition 2024)
 - Linux (system stats read from `/proc`)
-- `ffmpeg` / `ffprobe` on `PATH` (optional, only for the MP4 boot splash)
 
 ## Run
 
