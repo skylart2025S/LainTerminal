@@ -1,0 +1,11 @@
+[package]
+name = "gui-term"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.28"
+portable-pty = "0.8"
+vte = "0.13"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif"] }
+vt100 = "0.16.2"
