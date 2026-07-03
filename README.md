@@ -9,7 +9,7 @@ Click the picture to view it !!!
 ## Features
 
 - Full terminal emulation (works with `vim`, `nano`, and other TUIs)
-- **Lain reacts to your commands** happy, sad/upset,
+- Lain reacts to your commands happy, sad/upset,
   "watching" while you type
 - Animated sprites (GIFs) per mood
 - Live system stats (CPU, memory, network, load) from `/proc`
@@ -35,5 +35,5 @@ supported; if a mood has no sprite, a simple placeholder is drawn.
 
 ## Keybindings
 
-- `Ctrl+Shift+Q` — quit
+- `Ctrl+Shift+Q` to quit
 - All other keys are forwarded to the shell.
