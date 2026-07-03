@@ -1,12 +1,10 @@
-//! Translation of egui keyboard events into the byte sequences a terminal
-//! expects, so keystrokes can be forwarded straight to the PTY.
+//! Encoding egui keyboard events into the byte sequences a terminal expects.
 
 use eframe::egui::{Key, Modifiers};
 
-/// Encode a pressed key into terminal bytes. Returns `None` for keys that are
-/// already delivered as `Event::Text` (ordinary character typing).
+/// Encode a pressed key into terminal bytes, or `None` for keys already
+/// delivered as `Event::Text` (ordinary character typing).
 pub fn encode_key(key: Key, mods: Modifiers, app_cursor: bool) -> Option<Vec<u8>> {
-    // Control combinations: Ctrl+A..Z -> 0x01..0x1a, plus a few symbols.
     if let Some(b) = ctrl_byte(key).filter(|_| mods.ctrl) {
         return Some(vec![b]);
     }
@@ -51,10 +49,9 @@ fn cursor_seq(final_byte: u8, app_cursor: bool) -> &'static [u8] {
     }
 }
 
+/// Ctrl+A..Z -> 0x01..0x1a, plus a few symbols. Ctrl+C/X/V are omitted because
+/// egui delivers them as Copy/Cut/Paste events instead.
 fn ctrl_byte(key: Key) -> Option<u8> {
-    // Note: Ctrl+C, Ctrl+X and Ctrl+V are intentionally omitted here — egui
-    // delivers them as Copy/Cut/Paste events instead of key presses, so they
-    // are handled there to avoid missing or double-sending them.
     let b = match key {
         Key::A => 1,
         Key::B => 2,

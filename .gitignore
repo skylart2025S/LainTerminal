@@ -1,1 +1,7 @@
 /target
+
+# Editor swap files
+*.swp
+*.swo
+*~
+.*.kate-swp

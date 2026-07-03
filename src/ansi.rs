@@ -1,16 +1,12 @@
-//! Terminal emulation backed by the `vt100` crate.
+//! Terminal emulation backed by `vt100`, rendered with the egui painter.
 //!
-//! `vt100` maintains a full grid (cursor, colors, alternate screen, scroll
-//! regions, etc.), which is what lets real TUI programs like vim and nano work.
-//! We render its screen directly with the egui painter.
-//!
-//! Alongside it we run a tiny `vte` parser that only sniffs OSC 133 shell
-//! integration markers, so Lain's mood can still react to command execution.
+//! A secondary `vte` parser sniffs OSC 133 shell-integration markers so Lain's
+//! mood can react to command execution.
 
 use eframe::egui::{self, Align2, Color32, Pos2, Rect, Stroke, Vec2};
 use vte::{Params, Perform};
 
-/// Lain's current emotional state, derived from command execution.
+/// Lain's emotional state, derived from command execution.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Mood {
     Neutral,
@@ -18,7 +14,7 @@ pub enum Mood {
     Happy,
     Sad,
     Upset,
-    /// Shown while the user is typing (Lain is watching).
+    /// Shown while the user is typing.
     Watching,
 }
 
@@ -34,8 +30,6 @@ impl Mood {
         }
     }
 }
-
-// --- Theme -----------------------------------------------------------------
 
 pub const BG: Color32 = Color32::from_rgb(12, 12, 18);
 pub const FG: Color32 = Color32::from_rgb(198, 200, 214);
@@ -61,7 +55,7 @@ const PALETTE: [Color32; 16] = [
 
 const SCROLLBACK: usize = 2000;
 
-/// A terminal: a `vt100` grid plus an OSC 133 mood sniffer.
+/// A `vt100` grid plus an OSC 133 mood sniffer.
 pub struct Terminal {
     parser: vt100::Parser,
     sniff: vte::Parser,
@@ -77,7 +71,7 @@ impl Terminal {
         }
     }
 
-    /// Feed raw PTY output into the emulator (and the mood sniffer).
+    /// Feed raw PTY output into the emulator and the mood sniffer.
     pub fn process(&mut self, bytes: &[u8]) {
         self.parser.process(bytes);
         for &b in bytes {
@@ -89,9 +83,8 @@ impl Terminal {
         self.sniffer.mood
     }
 
-    /// Build replies to any terminal queries seen since the last call (cursor
-    /// position report, device status, device attributes). These must be
-    /// written back to the PTY so programs like vim don't stall waiting.
+    /// Replies to terminal queries (status, cursor position, device attributes)
+    /// seen since the last call, which must be written back to the PTY.
     pub fn take_responses(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
         if std::mem::take(&mut self.sniffer.report_status) {
@@ -102,8 +95,7 @@ impl Terminal {
             out.extend_from_slice(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
         }
         if std::mem::take(&mut self.sniffer.report_da) {
-            // Primary device attributes: "VT100 with advanced video".
-            out.extend_from_slice(b"\x1b[?1;2c");
+            out.extend_from_slice(b"\x1b[?1;2c"); // VT100 with advanced video
         }
         out
     }
@@ -116,20 +108,17 @@ impl Terminal {
         self.parser.screen_mut().set_size(rows, cols);
     }
 
-    /// Whether the app is in "application cursor keys" mode (affects how arrow
-    /// keys should be encoded).
+    /// Whether "application cursor keys" mode is active (affects arrow encoding).
     pub fn application_cursor(&self) -> bool {
         self.parser.screen().application_cursor()
     }
 
-    /// True when a full-screen app (vim, nano, ...) is using the alternate
-    /// screen buffer. We give those a solid backdrop for readability.
+    /// True when a full-screen app is using the alternate screen buffer.
     pub fn alternate_screen(&self) -> bool {
         self.parser.screen().alternate_screen()
     }
 
-    /// Paint the grid (and cursor) into `rect`. Cells are laid out on a fixed
-    /// monospace grid of `char_w` x `line_h` pixels.
+    /// Paint the grid and cursor into `rect` on a `char_w` x `line_h` cell grid.
     pub fn render(
         &self,
         painter: &egui::Painter,
@@ -161,7 +150,7 @@ impl Terminal {
                 let start = col;
                 let mut text = String::new();
 
-                // Coalesce a run of adjacent cells sharing the same style.
+                // Coalesce adjacent cells that share the same style.
                 while col < cols {
                     let Some(cell) = screen.cell(row, col) else {
                         break;
@@ -188,7 +177,13 @@ impl Terminal {
                         bg,
                     );
                 }
-                painter.text(Pos2::new(x, y), Align2::LEFT_TOP, &text, font.clone(), style.fg);
+                painter.text(
+                    Pos2::new(x, y),
+                    Align2::LEFT_TOP,
+                    &text,
+                    font.clone(),
+                    style.fg,
+                );
                 if style.underline {
                     painter.hline(x..=x + run_w, y + line_h - 1.0, Stroke::new(1.0, style.fg));
                 }
@@ -211,7 +206,7 @@ impl Terminal {
         if screen.hide_cursor() {
             return;
         }
-        // Blink: on ~65% of a ~1s cycle.
+        // Blink: visible for ~65% of each cycle.
         if (time * 1.4).rem_euclid(1.0) > 0.65 {
             return;
         }
@@ -280,7 +275,7 @@ fn convert_color(color: vt100::Color, default: Color32) -> Color32 {
     }
 }
 
-/// Nudge one of the base 8 colors toward its bright variant (for bold text).
+/// Map one of the base 8 colors to its bright variant (for bold text).
 fn brighten(c: Color32) -> Color32 {
     for i in 0..8 {
         if PALETTE[i] == c {
@@ -308,8 +303,7 @@ fn color_256(idx: u8) -> Color32 {
     }
 }
 
-// --- OSC 133 mood sniffer --------------------------------------------------
-
+/// Watches OSC 133 markers and terminal queries in the PTY byte stream.
 struct MoodSniffer {
     mood: Mood,
     rng: u64,
@@ -363,7 +357,6 @@ impl Perform for MoodSniffer {
         }
     }
 
-    // We only care about OSC;
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         let first = params.iter().next().map(|p| *p.first().unwrap_or(&0));
         match action {
@@ -373,7 +366,7 @@ impl Perform for MoodSniffer {
                 Some(6) => self.report_cursor = true,
                 _ => {}
             },
-            // Primary device attributes (only the plain `ESC [ c` form).
+            // Primary device attributes (plain `ESC [ c` form only).
             'c' if intermediates.is_empty() => self.report_da = true,
             _ => {}
         }

@@ -5,28 +5,27 @@ mod lain;
 mod stats;
 mod video;
 
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::sync::mpsc;
 use std::thread;
 
 use app::LainTerminal;
 
+const PTY_ROWS: u16 = 40;
+const PTY_COLS: u16 = 120;
+
 fn main() -> eframe::Result<()> {
-    // --- PTY setup ---
-    let pty_system = native_pty_system();
-    let pair = pty_system
+    let pair = native_pty_system()
         .openpty(PtySize {
-            rows: 40,
-            cols: 120,
+            rows: PTY_ROWS,
+            cols: PTY_COLS,
             pixel_width: 0,
             pixel_height: 0,
         })
         .expect("failed to open pty");
 
     let mut cmd = CommandBuilder::new("bash");
-    // Tell programs what terminal they're talking to, so vim/nano/etc. emit the
-    // right escape sequences and key encodings (vt100 understands xterm).
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     let _child = pair.slave.spawn_command(cmd).expect("failed to spawn bash");
@@ -38,8 +37,7 @@ fn main() -> eframe::Result<()> {
     let mut writer = pair.master.take_writer().expect("failed to take writer");
     let master = pair.master;
 
-    // GUI -> resize thread: keep the master alive here so we can resize the PTY
-    // when the rendered grid changes size.
+    // GUI -> PTY resize (master is kept alive here).
     let (resize_tx, resize_rx) = mpsc::channel::<(u16, u16)>();
     thread::spawn(move || {
         while let Ok((rows, cols)) = resize_rx.recv() {
@@ -52,19 +50,13 @@ fn main() -> eframe::Result<()> {
         }
     });
 
-    // PTY output -> GUI (raw bytes, so the ANSI parser sees escape sequences).
+    // PTY -> GUI (raw bytes, including escape sequences).
     let (out_tx, out_rx) = mpsc::channel::<Vec<u8>>();
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if out_tx.send(buf[..n].to_vec()).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 || out_tx.send(buf[..n].to_vec()).is_err() {
+                break;
             }
         }
     });
@@ -80,9 +72,7 @@ fn main() -> eframe::Result<()> {
         }
     });
 
-    // Enable OSC 133 shell integration so we can detect command start/finish
-    // and their exit status (this is what drives Lain's mood). Sent as a first
-    // command; `clear` afterwards keeps the setup out of view.
+    // Enable OSC 133 shell integration so command start/exit can drive Lain's mood.
     let init = concat!(
         "PS0=$'\\e]133;C\\a'; ",
         "PROMPT_COMMAND='printf \"\\033]133;D;%s\\007\" \"$?\"'; ",
@@ -90,7 +80,6 @@ fn main() -> eframe::Result<()> {
     );
     let _ = in_tx.send(init.as_bytes().to_vec());
 
-    // --- GUI ---
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 640.0])

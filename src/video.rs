@@ -1,10 +1,5 @@
-//! Minimal video playback by streaming decoded frames from the `ffmpeg` CLI.
-//!
-//! We spawn `ffmpeg` to decode the file to raw RGBA at native frame rate
-//! (`-re`) and downscaled, then read frames in a background thread. The UI
-//! uploads the most recent frame to a texture each tick. This avoids holding
-//! the whole (potentially huge) video in memory and is plenty for a short
-//! startup splash. Audio is not handled.
+//! Minimal video playback: `ffmpeg` decodes to raw RGBA (`-re`, downscaled) on a
+//! background thread and the UI uploads the newest frame each tick. No audio.
 
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
@@ -13,7 +8,7 @@ use std::thread;
 
 use eframe::egui::{self, Color32, Pos2, Rect};
 
-/// Max decoded height; width is scaled to preserve aspect ratio.
+/// Max decoded height; width scales to preserve aspect ratio.
 const TARGET_HEIGHT: u32 = 720;
 
 pub struct VideoPlayer {
@@ -25,8 +20,7 @@ pub struct VideoPlayer {
 }
 
 impl VideoPlayer {
-    /// Start decoding `path`. Returns `None` if the file is missing or ffmpeg /
-    /// ffprobe can't be run.
+    /// Start decoding `path`, or `None` if it's missing or ffmpeg/ffprobe fails.
     pub fn start(path: &str) -> Option<Self> {
         if !std::path::Path::new(path).exists() {
             return None;
@@ -37,7 +31,7 @@ impl VideoPlayer {
             return None;
         }
 
-        // Scale to TARGET_HEIGHT, keeping aspect, with even dimensions.
+        // Scale to TARGET_HEIGHT, keeping aspect, with even dimensions (h.264/rgba).
         let height = src_h.min(TARGET_HEIGHT);
         let width = (src_w * height / src_h) & !1;
         let height = height & !1;
@@ -70,7 +64,7 @@ impl VideoPlayer {
 
         thread::spawn(move || {
             let mut buf = vec![0u8; frame_size];
-            // Loop ends on EOF / pipe close or when the receiver is dropped.
+            // Ends on EOF/pipe close or when the receiver is dropped.
             while stdout.read_exact(&mut buf).is_ok() {
                 if tx.send(buf.clone()).is_err() {
                     break;
@@ -87,18 +81,15 @@ impl VideoPlayer {
         })
     }
 
-    /// Pull the latest decoded frame (dropping any backlog) and draw it filling
-    /// `rect` (cover fit, cropping overflow).
+    /// Draw the newest decoded frame (dropping backlog) as a cover-fit fill.
     pub fn draw(&mut self, ctx: &egui::Context, painter: &egui::Painter, rect: Rect) {
-        // Keep only the newest frame so playback never lags behind.
         let mut latest = None;
         while let Ok(frame) = self.rx.try_recv() {
             latest = Some(frame);
         }
 
         if let Some(frame) = latest {
-            let image =
-                egui::ColorImage::from_rgba_unmultiplied([self.width, self.height], &frame);
+            let image = egui::ColorImage::from_rgba_unmultiplied([self.width, self.height], &frame);
             match &mut self.texture {
                 Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
                 None => {
@@ -130,7 +121,7 @@ impl Drop for VideoPlayer {
     }
 }
 
-/// Query the video's pixel dimensions via `ffprobe`.
+/// Query the video's `(width, height)` in pixels via `ffprobe`.
 fn probe_dimensions(path: &str) -> Option<(u32, u32)> {
     let output = Command::new("ffprobe")
         .args([

@@ -1,35 +1,26 @@
-//! The egui application: theming, the boot splash, and the terminal view.
+//! The egui application: theming, boot splash, and terminal view.
 
 use std::sync::mpsc::{Receiver, Sender};
 
 use eframe::egui::{self, Color32};
 
-use crate::ansi::{Mood, Terminal, BG, FG};
+use crate::ansi::{BG, FG, Mood, Terminal};
 use crate::input::encode_key;
 use crate::lain;
 use crate::stats::{self, SysStats};
 use crate::video::VideoPlayer;
 
-/// Path to the optional startup splash video.
 const BOOT_VIDEO: &str = "sprites-backgrounds/copeland_os.mp4";
-
-/// Path to the optional terminal background image.
 const BACKGROUND: &str = "sprites-backgrounds/copeland_background.png";
 
-/// How long a command's result expression (happy/sad/upset) lingers before
-/// Lain returns to her neutral/idle state (seconds).
+/// Seconds a result expression (happy/sad/upset) lingers before returning to neutral.
 const RESULT_HOLD: f32 = 3.0;
-
-/// How long the startup splash animation plays before the terminal appears.
+/// Seconds the startup splash plays before the terminal appears.
 const BOOT_DURATION: f32 = 10.0;
-
-/// How long after the last keystroke Lain keeps "listening" before idling.
+/// Seconds after a keystroke that Lain keeps "watching" before idling.
 const TYPING_WINDOW: f32 = 1.2;
-
-/// Padding between the window edge and the terminal grid.
 const PAD: egui::Vec2 = egui::vec2(10.0, 8.0);
 
-/// Shared "Navi" UI palette.
 const ACCENT: Color32 = Color32::from_rgb(150, 220, 230);
 const DIM: Color32 = Color32::from_rgb(110, 112, 130);
 const HOT: Color32 = Color32::from_rgb(230, 120, 150);
@@ -42,25 +33,20 @@ pub struct LainTerminal {
     resize_tx: Sender<(u16, u16)>,
     font_size: f32,
     theme_installed: bool,
-    /// Current grid size (rows, cols); resends a resize when it changes.
     grid_size: (u16, u16),
-    /// Drives the idle "breathing"/blink animation for Lain and the cursor.
+    /// Drives idle animation for Lain and the cursor.
     anim_time: f32,
     avatar: lain::Avatar,
-    /// Used to detect when a new result mood appears, so we can time its hold.
     last_mood: Mood,
     /// `anim_time` after which a result expression reverts to Neutral.
     result_deadline: Option<f32>,
-    /// True while the startup splash animation is playing.
     booting: bool,
-    /// Optional video splash; takes precedence over the GIF splash.
+    /// Video splash; takes precedence over the GIF splash.
     boot_video: Option<VideoPlayer>,
-    /// Optional terminal background image (loaded lazily on first frame).
     background: Option<egui::TextureHandle>,
     background_loaded: bool,
-    /// Real system stats sampled from /proc.
     stats: SysStats,
-    /// `anim_time` of the last keystroke, for the typing reaction.
+    /// `anim_time` of the last keystroke.
     last_typed: f32,
 }
 
@@ -91,8 +77,7 @@ impl LainTerminal {
         }
     }
 
-    /// Pull any pending PTY output and feed it through the emulator, then reply
-    /// to any terminal queries (cursor position, device attributes, ...).
+    /// Feed pending PTY output through the emulator and reply to any queries.
     fn pump_output(&mut self) {
         while let Ok(chunk) = self.out_rx.try_recv() {
             self.terminal.process(&chunk);
@@ -113,9 +98,7 @@ impl LainTerminal {
                 match event {
                     egui::Event::Text(text) => bytes.extend_from_slice(text.as_bytes()),
                     egui::Event::Paste(text) => bytes.extend_from_slice(text.as_bytes()),
-                    // egui turns Ctrl+C/X into Copy/Cut events rather than key
-                    // presses; forward them as the raw control bytes a terminal
-                    // expects (Ctrl+C = SIGINT, Ctrl+X = 0x18).
+                    // egui delivers Ctrl+C/X as Copy/Cut; forward raw control bytes.
                     egui::Event::Copy => bytes.push(0x03),
                     egui::Event::Cut => bytes.push(0x18),
                     egui::Event::Key {
@@ -139,8 +122,7 @@ impl LainTerminal {
         }
     }
 
-    /// Render the full-screen startup splash animation (video if available,
-    /// otherwise the GIF).
+    /// Render the full-screen startup splash (video if available, else GIF).
     fn show_boot(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(BG))
@@ -161,7 +143,7 @@ impl LainTerminal {
             });
     }
 
-    /// Real system stats (CPU / memory / network / load) from `/proc`.
+    /// System stat meters (CPU / memory / network / load).
     fn draw_meters(&self, ui: &mut egui::Ui) {
         let s = &self.stats;
 
@@ -181,7 +163,11 @@ impl LainTerminal {
             ui,
             "mem",
             s.mem_pct,
-            format!("{}/{}", stats::fmt_size(s.mem_used), stats::fmt_size(s.mem_total)),
+            format!(
+                "{}/{}",
+                stats::fmt_size(s.mem_used),
+                stats::fmt_size(s.mem_total)
+            ),
         );
 
         ui.add_space(6.0);
@@ -193,7 +179,7 @@ impl LainTerminal {
         line(ui, format!("load    {:.2}", s.load1));
     }
 
-    /// A small "Navi"-style status block pinned to the bottom of the panel.
+    /// A "Navi"-style status block pinned to the bottom of the panel.
     fn draw_status(&self, ui: &mut egui::Ui) {
         let line = |ui: &mut egui::Ui, s: String, c: Color32| {
             ui.label(egui::RichText::new(s).monospace().size(11.0).color(c));
@@ -202,19 +188,22 @@ impl LainTerminal {
         let (rows, cols) = self.grid_size;
         let secs = self.anim_time as u64;
 
-        // bottom_up lays items out from the bottom edge upward.
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.add_space(2.0);
             line(ui, "protocol 7 // wired".into(), DIM);
             line(ui, format!("grid    {cols}x{rows}"), DIM);
-            line(ui, format!("uptime  {:02}:{:02}", secs / 60, secs % 60), DIM);
+            line(
+                ui,
+                format!("uptime  {:02}:{:02}", secs / 60, secs % 60),
+                DIM,
+            );
             line(ui, "NAVI".into(), ACCENT);
             ui.add_space(6.0);
             ui.separator();
         });
     }
 
-    /// Hold a command's result expression for a beat, then relax to Neutral.
+    /// Hold a result expression for [`RESULT_HOLD`], then relax to Neutral.
     fn update_mood_timer(&mut self) {
         let mood = self.terminal.mood();
         if mood != self.last_mood {
@@ -224,7 +213,10 @@ impl LainTerminal {
                 _ => None,
             };
         }
-        if self.result_deadline.is_some_and(|deadline| self.anim_time >= deadline) {
+        if self
+            .result_deadline
+            .is_some_and(|deadline| self.anim_time >= deadline)
+        {
             self.terminal.set_mood(Mood::Neutral);
             self.last_mood = Mood::Neutral;
             self.result_deadline = None;
@@ -247,10 +239,8 @@ impl LainTerminal {
         }
     }
 
-    /// A stylized "Navi" window frame: a mood-tinted pulsing glow border,
-    /// bright corner brackets, a `COPLAND OS` header tag, a divider before the
-    /// Lain column, and faint CRT scanlines over that column. Drawn on top of
-    /// all panels since the window itself is undecorated.
+    /// Draw the "Navi" window chrome: mood-tinted glow border, corner brackets,
+    /// header tag, divider, and CRT scanlines over the Lain column.
     fn draw_frame(&self, ctx: &egui::Context, mood: Mood) {
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground,
@@ -261,17 +251,14 @@ impl LainTerminal {
         let rounding = egui::Rounding::same(6.0);
 
         let accent = Color32::from_rgb(120, 200, 210);
-        // Border tint drifts toward the current mood color and gently pulses.
         let tint = blend(accent, mood_color(mood), 0.5);
         let pulse = 0.5 + 0.5 * (self.anim_time * 2.2).sin();
         let glow = tint.gamma_multiply(0.15 + 0.35 * pulse);
         let bright = blend(tint, Color32::WHITE, 0.25);
 
-        // Outer glow + crisp border.
         painter.rect_stroke(frame.expand(2.0), rounding, egui::Stroke::new(4.0, glow));
         painter.rect_stroke(frame, rounding, egui::Stroke::new(1.2, tint));
 
-        // Corner brackets.
         let len = 20.0;
         let stroke = egui::Stroke::new(2.5, bright);
         let corner = |p: egui::Pos2, dx: f32, dy: f32| {
@@ -283,17 +270,24 @@ impl LainTerminal {
         corner(frame.left_bottom(), 1.0, -1.0);
         corner(frame.right_bottom(), -1.0, -1.0);
 
-        // Header tag inset into the top border.
         let font = egui::FontId::monospace(11.0);
         let galley = painter.layout_no_wrap("◈ COPLAND OS ◈".to_owned(), font, bright);
         let size = galley.size();
         let center = egui::pos2(screen.center().x, frame.top());
         let chip = egui::Rect::from_center_size(center, egui::vec2(size.x + 16.0, size.y + 5.0));
-        painter.rect_filled(chip, egui::Rounding::same(3.0), Color32::from_rgb(10, 10, 16));
-        painter.rect_stroke(chip, egui::Rounding::same(3.0), egui::Stroke::new(1.0, tint));
+        painter.rect_filled(
+            chip,
+            egui::Rounding::same(3.0),
+            Color32::from_rgb(10, 10, 16),
+        );
+        painter.rect_stroke(
+            chip,
+            egui::Rounding::same(3.0),
+            egui::Stroke::new(1.0, tint),
+        );
         painter.galley(center - size / 2.0, galley, bright);
 
-        // Divider before the Lain column (panel is 240px on the right).
+        // Divider before the 240px Lain column, plus CRT scanlines over it.
         let div_x = screen.right() - 240.0;
         if div_x > frame.left() + 40.0 {
             painter.line_segment(
@@ -305,7 +299,6 @@ impl LainTerminal {
             );
             painter.circle_filled(egui::pos2(div_x, frame.top()), 2.5, bright);
 
-            // Faint CRT scanlines over the Lain column.
             let scan = Color32::from_rgba_unmultiplied(0, 0, 0, 55);
             let mut y = frame.top() + 4.0;
             while y < frame.bottom() - 4.0 {
@@ -315,13 +308,12 @@ impl LainTerminal {
         }
     }
 
-    /// Custom window controls (the window is undecorated): a draggable top
-    /// strip plus minimize / maximize / close buttons.
+    /// Custom controls for the undecorated window: a draggable title strip and
+    /// minimize / maximize / close buttons.
     fn draw_window_controls(&self, ctx: &egui::Context) {
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let screen = ctx.screen_rect();
 
-        // Draggable title strip across the top (double-click to maximize).
         egui::Area::new(egui::Id::new("titlebar_drag"))
             .order(egui::Order::Middle)
             .fixed_pos(screen.left_top())
@@ -338,7 +330,6 @@ impl LainTerminal {
                 }
             });
 
-        // Buttons in the top-right, inside the border.
         egui::Area::new(egui::Id::new("win_buttons"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 5.0))
@@ -375,7 +366,7 @@ impl eframe::App for LainTerminal {
             self.theme_installed = true;
         }
 
-        // Skip the (large) GIF splash when a video splash is present.
+        // Skip the GIF splash when a video splash is present.
         self.avatar
             .load(ctx, "sprites-backgrounds", self.boot_video.is_none());
 
@@ -387,13 +378,13 @@ impl eframe::App for LainTerminal {
         self.anim_time += ctx.input(|i| i.stable_dt).min(0.1);
         self.pump_output();
 
-        // Quit on Ctrl+Shift+Q. (Esc is left for the terminal, so vim works.)
-        let quit = ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Q));
+        // Quit on Ctrl+Shift+Q (Esc is reserved for the terminal).
+        let quit =
+            ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Q));
         if quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
-        // --- Startup splash ---------------------------------------------
         if self.booting {
             let have_splash = self.boot_video.is_some() || self.avatar.has_boot();
             let skip = ctx.input(|i| {
@@ -404,7 +395,7 @@ impl eframe::App for LainTerminal {
             });
             if !have_splash || self.anim_time >= BOOT_DURATION || skip {
                 self.booting = false;
-                self.boot_video = None; // stops ffmpeg (see Drop impl)
+                self.boot_video = None; // drops the player, stopping ffmpeg
             } else {
                 self.show_boot(ctx);
                 ctx.request_repaint();
@@ -416,8 +407,7 @@ impl eframe::App for LainTerminal {
         self.update_mood_timer();
         self.stats.update();
 
-        // Paint one continuous background across the whole window, behind both
-        // panels (which are transparent), so they share the same backdrop.
+        // One backdrop behind both (transparent) panels.
         {
             let painter = ctx.layer_painter(egui::LayerId::background());
             let screen = ctx.screen_rect();
@@ -436,9 +426,8 @@ impl eframe::App for LainTerminal {
             }
         }
 
-        // Display mood. Lain "watches" while you type. Inside a full-screen app
-        // (vim/nano) she watches on keystrokes and idles when you pause;
-        // otherwise command-execution moods take priority over the typing hint.
+        // In a full-screen app Lain watches on keystrokes and idles on pause;
+        // otherwise command-result moods take priority over the typing hint.
         let base = self.terminal.mood();
         let typing = self.anim_time - self.last_typed < TYPING_WINDOW;
         let (mood, mood_label): (Mood, &str) = if self.terminal.alternate_screen() {
@@ -453,7 +442,6 @@ impl eframe::App for LainTerminal {
             (base, base.label())
         };
 
-        // --- Lain side panel --------------------------------------------
         egui::SidePanel::right("lain_panel")
             .exact_width(240.0)
             .resizable(false)
@@ -488,38 +476,38 @@ impl eframe::App for LainTerminal {
                     );
                 });
 
-                // Fill the middle with animated status meters, and pin a small
-                // readout to the very bottom.
                 self.draw_meters(ui);
                 self.draw_status(ui);
             });
 
-        // --- Terminal ---------------------------------------------------
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(Color32::TRANSPARENT))
             .show(ctx, |ui| {
                 let full = ui.max_rect();
 
-                // Full-screen apps (vim/nano) get a solid backdrop so the
-                // background image/scanlines don't bleed through their UI.
+                // Full-screen apps get a solid backdrop for readability.
                 if self.terminal.alternate_screen() {
                     ui.painter().rect_filled(full, 0.0, BG);
                 }
 
-                // Leave a little extra headroom at the top for the header tag.
-                let term_rect = egui::Rect::from_min_max(
-                    full.min + egui::vec2(PAD.x, 20.0),
-                    full.max - PAD,
-                );
+                // Extra top headroom for the header tag.
+                let term_rect =
+                    egui::Rect::from_min_max(full.min + egui::vec2(PAD.x, 20.0), full.max - PAD);
                 self.sync_size(ctx, term_rect);
 
                 let font_id = egui::FontId::monospace(self.font_size);
                 let char_w = ctx.fonts(|f| f.glyph_width(&font_id, 'M')).max(1.0);
                 let line_h = ctx.fonts(|f| f.row_height(&font_id)).max(1.0);
-                self.terminal
-                    .render(ui.painter(), term_rect, char_w, line_h, self.font_size, self.anim_time);
+                self.terminal.render(
+                    ui.painter(),
+                    term_rect,
+                    char_w,
+                    line_h,
+                    self.font_size,
+                    self.anim_time,
+                );
 
-                // Keep keyboard focus on the terminal so keys are captured.
+                // Keep focus on the terminal so keys are captured.
                 let resp = ui.interact(
                     full,
                     ui.id().with("terminal"),
@@ -536,7 +524,7 @@ impl eframe::App for LainTerminal {
     }
 }
 
-/// One labelled percentage bar with a value string on the right.
+/// A labelled percentage bar with a value string beneath it.
 fn stat_bar(ui: &mut egui::Ui, label: &str, pct: f32, value: String) {
     ui.horizontal(|ui| {
         ui.label(
@@ -557,12 +545,17 @@ fn stat_bar(ui: &mut egui::Ui, label: &str, pct: f32, value: String) {
     ui.add_space(4.0);
 }
 
-/// A small frameless window-control button; returns true when clicked.
+/// A frameless window-control button; returns `true` when clicked.
 fn win_button(ui: &mut egui::Ui, glyph: &str, color: Color32) -> bool {
     let resp = ui.add(
-        egui::Button::new(egui::RichText::new(glyph).monospace().size(14.0).color(color))
-            .frame(false)
-            .min_size(egui::vec2(22.0, 18.0)),
+        egui::Button::new(
+            egui::RichText::new(glyph)
+                .monospace()
+                .size(14.0)
+                .color(color),
+        )
+        .frame(false)
+        .min_size(egui::vec2(22.0, 18.0)),
     );
     if resp.hovered() {
         ui.painter().rect_filled(
@@ -574,7 +567,7 @@ fn win_button(ui: &mut egui::Ui, glyph: &str, color: Color32) -> bool {
     resp.clicked()
 }
 
-/// Linearly interpolate between two colors (`t` in 0..1).
+/// Linearly interpolate between two colors (`t` in `0..=1`).
 fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
     let mix = |x: u8, y: u8| (x as f32 * (1.0 - t) + y as f32 * t).round() as u8;

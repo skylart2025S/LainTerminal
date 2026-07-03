@@ -1,8 +1,8 @@
-//! Real system statistics sampled from Linux `/proc`, no external crates.
+//! System statistics sampled from Linux `/proc`.
 //!
-//! CPU and network are rates, so they're computed from deltas between samples.
-//! [`SysStats::update`] is cheap and self-throttles to ~1s, so it can be called
-//! every frame.
+//! CPU and network are rates computed from deltas between samples.
+//! [`SysStats::update`] self-throttles to [`SAMPLE_INTERVAL`], so it is cheap to
+//! call every frame.
 
 use std::time::{Duration, Instant};
 
@@ -14,12 +14,11 @@ pub struct SysStats {
     pub mem_used: u64,
     pub mem_total: u64,
     pub mem_pct: f32,
-    /// Receive / transmit throughput in bytes per second.
+    /// Receive / transmit throughput, bytes per second.
     pub rx_rate: f64,
     pub tx_rate: f64,
     pub load1: f32,
 
-    // Internal sampling state.
     last_sample: Option<Instant>,
     prev_cpu: Option<(u64, u64)>, // (idle, total)
     prev_net: Option<(u64, u64)>, // (rx, tx)
@@ -32,7 +31,7 @@ impl SysStats {
         s
     }
 
-    /// Refresh the stats if at least `SAMPLE_INTERVAL` has elapsed.
+    /// Resample if at least [`SAMPLE_INTERVAL`] has elapsed.
     pub fn update(&mut self) {
         let now = Instant::now();
         let dt = match self.last_sample {
@@ -82,10 +81,10 @@ impl SysStats {
     }
 }
 
-/// Aggregate CPU time from `/proc/stat`: returns (idle, total) jiffies.
+/// Aggregate `(idle, total)` CPU jiffies from `/proc/stat`.
 fn read_cpu() -> Option<(u64, u64)> {
     let stat = std::fs::read_to_string("/proc/stat").ok()?;
-    let line = stat.lines().next()?; // "cpu  u n s idle iowait irq ..."
+    let line = stat.lines().next()?; // "cpu  user nice system idle iowait ..."
     let mut fields = line.split_whitespace();
     if fields.next()? != "cpu" {
         return None;
@@ -99,7 +98,7 @@ fn read_cpu() -> Option<(u64, u64)> {
     Some((idle, total))
 }
 
-/// Total and available memory in bytes from `/proc/meminfo`.
+/// `(total, available)` memory in bytes from `/proc/meminfo`.
 fn read_mem() -> Option<(u64, u64)> {
     let info = std::fs::read_to_string("/proc/meminfo").ok()?;
     let mut total = None;
@@ -118,10 +117,14 @@ fn read_mem() -> Option<(u64, u64)> {
 }
 
 fn parse_kb(s: &str) -> Option<u64> {
-    s.split_whitespace().next()?.parse::<u64>().ok().map(|kb| kb * 1024)
+    s.split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()
+        .map(|kb| kb * 1024)
 }
 
-/// Total received / transmitted bytes across all real interfaces (skips `lo`).
+/// Total `(rx, tx)` bytes across all real interfaces (skips loopback).
 fn read_net() -> Option<(u64, u64)> {
     let dev = std::fs::read_to_string("/proc/net/dev").ok()?;
     let mut rx = 0u64;
@@ -134,8 +137,11 @@ fn read_net() -> Option<(u64, u64)> {
         if iface == "lo" {
             continue;
         }
-        let cols: Vec<u64> = rest.split_whitespace().filter_map(|v| v.parse().ok()).collect();
-        // rx bytes = col 0, tx bytes = col 8.
+        let cols: Vec<u64> = rest
+            .split_whitespace()
+            .filter_map(|v| v.parse().ok())
+            .collect();
+        // rx bytes = column 0, tx bytes = column 8.
         if cols.len() >= 9 {
             rx += cols[0];
             tx += cols[8];

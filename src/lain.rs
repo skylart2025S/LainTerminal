@@ -1,8 +1,7 @@
 //! Rendering for the "Lain" avatar.
 //!
-//! [`Avatar`] loads sprite images (one per [`Mood`]) from a directory and draws
-//! the one matching the current mood. If a sprite is missing it falls back to a
-//! simple placeholder, so the app always shows *something*.
+//! [`Avatar`] loads one sprite per [`Mood`] and draws the one matching the
+//! current mood, falling back to a painted placeholder when a sprite is absent.
 
 use std::collections::HashMap;
 use std::io::BufReader;
@@ -13,13 +12,13 @@ use image::AnimationDecoder;
 
 use crate::ansi::Mood;
 
-/// One frame of an animated sprite plus how long to show it.
+/// One frame of an animated sprite and how long to show it (seconds).
 struct Frame {
     texture: egui::TextureHandle,
     delay: f32,
 }
 
-/// A sprite is either a single still image or an animated sequence (GIF).
+/// A still image or an animated GIF sequence.
 enum Sprite {
     Static(egui::TextureHandle),
     Animated { frames: Vec<Frame>, total: f32 },
@@ -51,21 +50,18 @@ impl Sprite {
     }
 }
 
-/// Loaded sprites keyed by mood, with a painted fallback.
+/// Loaded sprites keyed by mood, plus the startup splash.
 #[derive(Default)]
 pub struct Avatar {
     sprites: HashMap<Mood, Sprite>,
-    /// Optional boot/splash animation shown once at startup.
     boot: Option<Sprite>,
     loaded: bool,
 }
 
 impl Avatar {
-    /// Scan `dir` for image files and map each to a mood by keyword in its
-    /// filename. Safe to call once; subsequent calls are no-ops.
-    ///
-    /// When `load_boot` is false, the (potentially large) startup splash GIF is
-    /// skipped — used when a video splash supersedes it.
+    /// Scan `dir` and map each image to a mood by keywords in its filename.
+    /// Idempotent. With `load_boot` false, the splash GIF is skipped (used when
+    /// a video splash supersedes it).
     pub fn load(&mut self, ctx: &egui::Context, dir: impl AsRef<Path>, load_boot: bool) {
         if self.loaded {
             return;
@@ -95,7 +91,7 @@ impl Avatar {
                 .unwrap_or("")
                 .to_ascii_lowercase();
 
-            // The startup splash animation (e.g. "copeland_os").
+            // The startup splash (e.g. "copeland_os").
             if stem.contains("copeland") || stem.contains("boot") || stem.contains("splash") {
                 if load_boot && self.boot.is_none() {
                     self.boot = if is_gif {
@@ -111,7 +107,7 @@ impl Avatar {
                 continue;
             };
 
-            // An animated sprite always wins; otherwise keep the first match.
+            // An animated sprite wins; otherwise keep the first match.
             match self.sprites.get(&mood) {
                 Some(existing) if existing.is_animated() || !is_gif => continue,
                 _ => {}
@@ -128,7 +124,7 @@ impl Avatar {
         }
     }
 
-    /// Whether a startup splash animation was loaded.
+    /// Whether a startup splash was loaded.
     pub fn has_boot(&self) -> bool {
         self.boot.is_some()
     }
@@ -140,11 +136,9 @@ impl Avatar {
         }
     }
 
-    /// Draw the avatar for `mood` as a full-bleed background filling `rect`
-    /// (cover fit, cropping overflow). Falls back to a simple placeholder.
+    /// Draw the `mood` sprite as a cover-fit background, falling back to the
+    /// Neutral sprite and then a placeholder.
     pub fn draw_background(&self, painter: &egui::Painter, rect: Rect, mood: Mood, time: f32) {
-        // Prefer the mood's own sprite, then fall back to the Neutral sprite
-        // (e.g. no dedicated image), then to the placeholder.
         let sprite = self
             .sprites
             .get(&mood)
@@ -157,8 +151,7 @@ impl Avatar {
     }
 }
 
-/// Match a lowercased filename stem to a mood via keywords, so custom names
-/// still work (e.g. "smile", "wired", "close_the_world").
+/// Match a lowercased filename stem to a mood via keywords.
 fn mood_for_name(stem: &str) -> Option<Mood> {
     const HAPPY: &[&str] = &["happy", "smile", "joy", "love", "glad", "content"];
     const UPSET: &[&str] = &["upset", "angry", "mad", "annoyed", "frustrat", "scared"];
@@ -167,11 +160,13 @@ fn mood_for_name(stem: &str) -> Option<Mood> {
     const THINKING: &[&str] = &[
         "think", "connect", "load", "wired", "confus", "curious", "process", "run",
     ];
-    const NEUTRAL: &[&str] = &["neutral", "idle", "normal", "default", "blank", "present", "calm"];
+    const NEUTRAL: &[&str] = &[
+        "neutral", "idle", "normal", "default", "blank", "present", "calm",
+    ];
 
     let has = |kws: &[&str]| kws.iter().any(|k| stem.contains(k));
 
-    // Check Upset before Sad so alternate-failure names win their own slot.
+    // Upset before Sad so alternate-failure names win their own slot.
     if has(HAPPY) {
         Some(Mood::Happy)
     } else if has(UPSET) {
@@ -189,8 +184,7 @@ fn mood_for_name(stem: &str) -> Option<Mood> {
     }
 }
 
-/// Load a single still image as a texture (e.g. a background). Returns `None`
-/// if the file is missing or can't be decoded.
+/// Load a still image as a texture, or `None` if it can't be read/decoded.
 pub fn load_texture(ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
     match load_static(ctx, Path::new(path)) {
         Some(Sprite::Static(texture)) => Some(texture),
@@ -198,7 +192,7 @@ pub fn load_texture(ctx: &egui::Context, path: &str) -> Option<egui::TextureHand
     }
 }
 
-/// Draw a texture filling `rect` (cover fit: fills the area, cropping excess).
+/// Draw a texture filling `rect`, cropping overflow to preserve aspect ratio.
 pub fn draw_cover(painter: &egui::Painter, rect: Rect, texture: &egui::TextureHandle) {
     let size = texture.size_vec2();
     let scale = (rect.width() / size.x).max(rect.height() / size.y);
@@ -227,8 +221,12 @@ fn load_animated(ctx: &egui::Context, path: &Path) -> Option<Sprite> {
     let mut total = 0.0;
     for (i, frame) in decoder.into_frames().flatten().enumerate() {
         let (num, den) = frame.delay().numer_denom_ms();
-        // Clamp odd/zero delays to something sane (~10 fps default).
-        let delay = if den == 0 { 100.0 } else { num as f32 / den as f32 };
+        // Default odd/zero delays to ~10 fps, then clamp to a sane range.
+        let delay = if den == 0 {
+            100.0
+        } else {
+            num as f32 / den as f32
+        };
         let delay = (delay / 1000.0).clamp(0.02, 1.0);
         let buffer = frame.into_buffer();
         let texture = upload(ctx, &format!("{name}_{i}"), &buffer);
@@ -244,14 +242,22 @@ fn load_animated(ctx: &egui::Context, path: &Path) -> Option<Sprite> {
 
 fn upload(ctx: &egui::Context, name: &str, img: &image::RgbaImage) -> egui::TextureHandle {
     let size = [img.width() as usize, img.height() as usize];
-    let color_image = egui::ColorImage::from_rgba_unmultiplied(size, img.as_flat_samples().as_slice());
-    ctx.load_texture(format!("lain_{name}"), color_image, egui::TextureOptions::LINEAR)
+    let color_image =
+        egui::ColorImage::from_rgba_unmultiplied(size, img.as_flat_samples().as_slice());
+    ctx.load_texture(
+        format!("lain_{name}"),
+        color_image,
+        egui::TextureOptions::LINEAR,
+    )
 }
 
-/// Minimal fallback drawn when a mood has no sprite: a mood-tinted disc on a
-/// dark panel.
+/// Fallback for a mood with no sprite: a tinted disc on a dark panel.
 fn draw_placeholder(painter: &egui::Painter, rect: Rect, mood: Mood) {
-    painter.rect_filled(rect, egui::Rounding::same(6.0), Color32::from_rgb(16, 16, 22));
+    painter.rect_filled(
+        rect,
+        egui::Rounding::same(6.0),
+        Color32::from_rgb(16, 16, 22),
+    );
     let color = match mood {
         Mood::Neutral => Color32::from_rgb(120, 122, 140),
         Mood::Thinking => Color32::from_rgb(120, 160, 220),
