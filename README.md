@@ -1,7 +1,7 @@
 # gui-term
 
-A small GUI terminal emulator in Rust, themed after *Serial Experiments Lain*.
-It runs a real shell and shows a "Lain" avatar in a side panel whose expression
+A GUI terminal emulator in Rust.
+It runs a shell and shows a "Lain" avatar in a side panel whose expression
 reacts to what your commands do.
 
 Click the picture to view it !!!
@@ -16,8 +16,8 @@ Click the picture to view it !!!
 
 ## Requirements
 
-- Rust (edition 2024)
-- Linux (system stats read from `/proc`)
+- Rust
+- Linux
 
 ## Run
 
